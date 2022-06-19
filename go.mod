@@ -2,7 +2,10 @@ module github.com/westphae/caliban
 
 go 1.18
 
-require github.com/spf13/viper v1.12.0
+require (
+	github.com/gorilla/websocket v1.5.0
+	github.com/spf13/viper v1.12.0
+)
 
 require (
 	github.com/fsnotify/fsnotify v1.5.4 // indirect
