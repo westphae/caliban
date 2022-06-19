@@ -9,7 +9,9 @@ import (
 
 var (
 	RESTRootURL = "https://swd.weatherflow.com/swd/rest"
-	stationURL  = "%s/stations?token=%s"
+	stationsURL = "%s/stations?token=%s"
+	stationURL  = "%s/stations/%d?token=%s"
+	WSURL       = "wss://ws.weatherflow.com/swd/data?token=%s"
 )
 
 type Status struct {
@@ -76,8 +78,14 @@ type Stations struct {
 	Stations []Station `json:"stations"`
 }
 
-func GetStations(token string) (station *Station, err error) {
-	url := fmt.Sprintf(stationURL, RESTRootURL, token)
+type WSReqMessage struct {
+	Type     string `json:"type"`
+	DeviceId int    `json:"device_id"`
+	Id       string `json:"id"`
+}
+
+func GetStations(token string) (stationList []Station, err error) {
+	url := fmt.Sprintf(stationsURL, RESTRootURL, token)
 	resp, err := http.Get(url)
 	if err != nil {
 		return nil, err
@@ -95,7 +103,31 @@ func GetStations(token string) (station *Station, err error) {
 	}
 
 	if stations.Status.Code != 0 {
-		return nil, fmt.Errorf("Tempest return error code %d: %s", stations.Status.Code, stations.Status.Message)
+		return nil, fmt.Errorf("tempest return error code %d: %s", stations.Status.Code, stations.Status.Message)
+	}
+
+	return stations.Stations, nil
+}
+func GetStation(token string, stationId int) (station *Station, err error) {
+	url := fmt.Sprintf(stationURL, RESTRootURL, stationId, token)
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	var stations Stations
+	if err := json.Unmarshal(body, &stations); err != nil {
+		return nil, err
+	}
+
+	if stations.Status.Code != 0 {
+		return nil, fmt.Errorf("tempest return error code %d: %s", stations.Status.Code, stations.Status.Message)
 	}
 
 	return &stations.Stations[0], nil
