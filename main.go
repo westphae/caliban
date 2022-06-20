@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/spf13/viper"
@@ -61,18 +62,23 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	log.Printf("client subscribed, listening...")
+	log.Printf("client subscribed to tempest, listening...")
 
 	i := 0
 	for obs := range obsCh {
 		i += 1
-		log.Printf("client received message %d: %+v", i, obs)
+		log.Printf("client received tempest message %d: %+v", i, obs)
 
 		// Save to sqlite db
-		if err = wx.SaveTempestDataToDb(obs); err != nil {
+		err = wx.SaveTempestDataToDb(deviceId, obs)
+		switch {
+		case err == nil:
+			log.Println("saved tempest data to sqlite db")
+		case strings.HasPrefix(err.Error(), "UNIQUE constraint failed"):
+			log.Println("observation already in sqlite db")
+		default:
 			panic(err)
 		}
-		log.Println("saved data to sqlite db")
 
 		// Windy only wants data every 5 minutes
 		dts := obs.Timestamp - lastTimestamp
@@ -93,20 +99,24 @@ func main() {
 			Precip:   float64(obs.RainAccumulation),
 			UV:       obs.UV,
 		}
-		log.Printf("sending %+v", observation)
+		log.Printf("sending to windy: %+v", observation)
 
-		if err = windy.SendToWindy(
+		err = windy.SendToWindy(
 			windyApiKey,
 			[]windy.Station{station},
 			[]windy.Observation{observation},
-		); err != nil {
+		)
+		if err != nil {
+			if _, ok := err.(windy.WindyError); ok {
+				log.Println(err)
+				continue
+			}
 			panic(err)
 		}
-
+		log.Println("windy updated successfully")
 		lastTimestamp = obs.Timestamp
 	}
 
 	close(obsCh)
-	log.Println("client channel closed")
-
+	log.Println("client tempest channel closed")
 }

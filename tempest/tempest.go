@@ -306,7 +306,7 @@ func SubscribeObservations(token string, deviceId int) (ch chan Observation, err
 	if conn, _, err = websocket.DefaultDialer.Dial(u.String(), nil); err != nil {
 		return nil, err
 	}
-	log.Println("connected to ws")
+	log.Println("connected to tempest ws")
 	if err = conn.ReadJSON(&msg); err != nil {
 		conn.Close()
 		return nil, err
@@ -315,7 +315,7 @@ func SubscribeObservations(token string, deviceId int) (ch chan Observation, err
 		log.Printf("%+v", msg)
 		return nil, fmt.Errorf("received message type %s, expecting connection_opened", msg.Type)
 	}
-	log.Printf("received connection_opened: %+v", msg)
+	log.Printf("received connection_opened from tempest: %+v", msg)
 
 	// Subscribe
 	req = WSReqMessage{
@@ -330,7 +330,7 @@ func SubscribeObservations(token string, deviceId int) (ch chan Observation, err
 	if err = conn.WriteMessage(websocket.TextMessage, reqJson); err != nil {
 		return nil, err
 	}
-	log.Printf("sent listen_start message %+v", req)
+	log.Printf("sent listen_start message to tempest %+v", req)
 	if err = conn.ReadJSON(&msg); err != nil {
 		conn.Close()
 		return nil, err
@@ -339,29 +339,28 @@ func SubscribeObservations(token string, deviceId int) (ch chan Observation, err
 		log.Printf("%+v", msg)
 		return nil, fmt.Errorf("received message type %s, expecting ack", msg.Type)
 	}
-	log.Printf("subscribed: %+v", msg)
+	log.Printf("subscribed tempest: %+v", msg)
 
 	ch = make(chan Observation)
 
 	go func() {
 		for {
-			log.Println("waiting for message")
+			log.Println("waiting for tempest message")
 			if err = conn.ReadJSON(&msg); err != nil {
 				close(ch)
 				break
 			}
-			log.Printf("received message %+v", msg)
+			log.Printf("received tempest message %+v", msg)
 			if msg.Type != "obs_st" {
-				log.Println("Unexpected msg type received")
-				log.Printf("%+v", msg)
+				log.Printf("Unexpected msg type received from tempest: %+v", msg)
 				continue
 			}
 			for _, v := range msg.ObservationsRaw {
 				ch <- RawToObs(v)
 			}
-			log.Printf("message passed on")
+			log.Printf("tempest message sent to client")
 		}
-		log.Println("closing connection and channel")
+		log.Println("closing tempest ws connection and channel")
 		req = WSReqMessage{
 			Type:     "listen_stop",
 			DeviceId: deviceId,
@@ -374,7 +373,7 @@ func SubscribeObservations(token string, deviceId int) (ch chan Observation, err
 			log.Println(err)
 		}
 		conn.Close()
-		log.Println("bye!")
+		log.Println("goodbye tempest!")
 	}()
 
 	return ch, nil

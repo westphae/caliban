@@ -3,6 +3,7 @@ package wx
 import (
 	"database/sql"
 	"github.com/westphae/caliban/tempest"
+	"log"
 	"math"
 )
 
@@ -10,7 +11,7 @@ const (
 	dbFile    string = "tempest.db"
 	createObs string = `
 CREATE TABLE IF NOT EXISTS observations (
-id INTEGER NOT NULL PRIMARY KEY,
+deviceId INTEGER NOT NULL,
 timestamp INTEGER NOT NULL,
 windLull REAL,
 windAvg REAL,
@@ -32,10 +33,11 @@ reportInterval INTEGER,
 localDayRainAccumulation INTEGER,
 nCRainAccumulation INTEGER,
 localDayNCRainAccumulation INTEGER,
-precipitationAnalysisType INTEGER
+precipitationAnalysisType INTEGER,
+PRIMARY KEY (deviceId, timestamp)
 );`
 	insertObs string = `
-INSERT INTO observations VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+INSERT INTO observations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 );`
 )
 
@@ -61,9 +63,10 @@ func init() {
 	}
 }
 
-func SaveTempestDataToDb(obs tempest.Observation) (err error) {
+func SaveTempestDataToDb(deviceId int, obs tempest.Observation) (err error) {
 	res, err := db.Exec(insertObs,
 		obs.Timestamp,
+		deviceId,
 		obs.WindLull,
 		obs.WindAvg,
 		obs.WindGust,
@@ -87,6 +90,7 @@ func SaveTempestDataToDb(obs tempest.Observation) (err error) {
 		obs.PrecipitationAnalysisType,
 	)
 	if err != nil {
+		log.Printf("%T: %s", err, err)
 		return err
 	}
 

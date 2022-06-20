@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"net/http"
 )
 
@@ -46,6 +45,12 @@ type Observation struct {
 	UV           float64 `json:"uv,omitempty"`
 }
 
+type WindyError struct{}
+
+func (e WindyError) Error() string {
+	return "windy not updating, less than 5 minutes since last update"
+}
+
 func SendToWindy(apiKey string, stations []Station, observations []Observation) (err error) {
 	var (
 		jsonData []byte
@@ -65,9 +70,13 @@ func SendToWindy(apiKey string, stations []Station, observations []Observation) 
 		return err
 	}
 
-	log.Printf("response status: %s", resp.Status)
 	body, _ := ioutil.ReadAll(resp.Body)
-	log.Printf("response body: %s", string(body))
+	if len(body) > len("SUCCESS") {
+		return WindyError{}
+	}
+	if resp.StatusCode != http.StatusOK {
+		return err
+	}
 
 	return nil
 }
