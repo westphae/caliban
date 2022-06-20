@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/spf13/viper"
 	"github.com/westphae/caliban/tempest"
 	"github.com/westphae/caliban/windy"
@@ -66,6 +67,12 @@ func main() {
 	for obs := range obsCh {
 		i += 1
 		log.Printf("client received message %d: %+v", i, obs)
+
+		// Save to sqlite db
+		if err = wx.SaveTempestDataToDb(obs); err != nil {
+			panic(err)
+		}
+		log.Println("saved data to sqlite db")
 
 		// Windy only wants data every 5 minutes
 		dts := obs.Timestamp - lastTimestamp

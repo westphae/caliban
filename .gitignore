@@ -16,6 +16,7 @@
 
 # Secrets
 *.yml
+tempest.db
 
 # Goland
 .idea
