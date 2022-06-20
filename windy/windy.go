@@ -15,13 +15,13 @@ var (
 
 type Station struct {
 	Station     int     `json:"station"`
-	ShareOption string  `json:"shareOption"`
-	Name        string  `json:"name"`
-	Latitude    float64 `json:"latitude"`
-	Longitude   float64 `json:"longitude"`
-	Elevation   float64 `json:"elevation"`
-	TempHeight  float64 `json:"tempheight"`
-	WindHeight  float64 `json:"windheight"`
+	ShareOption string  `json:"shareOption,omitempty"`
+	Name        string  `json:"name,omitempty"`
+	Latitude    float64 `json:"latitude,omitempty"`
+	Longitude   float64 `json:"longitude,omitempty"`
+	Elevation   float64 `json:"elevation,omitempty"`
+	TempHeight  float64 `json:"tempheight,omitempty"`
+	WindHeight  float64 `json:"windheight,omitempty"`
 }
 
 type Observation struct {
@@ -33,7 +33,7 @@ type Observation struct {
 	TempF        float64 `json:"tempf,omitempty"`
 	Wind         float64 `json:"wind,omitempty"`
 	WindSpeedMPH float64 `json:"windspeedmph,omitempty"`
-	WindDir      int     `json:"winddir,omitempty"`
+	WindDir      int     `json:"winddir"`
 	Gust         float64 `json:"gust,omitempty"`
 	WindGustMPH  float64 `json:"windgustmph,omitempty"`
 	RH           int     `json:"rh,omitempty"`
