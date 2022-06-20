@@ -285,7 +285,7 @@ func GetDeviceObservations(token string, deviceId int, timeStart, timeEnd int64)
 	return obs, nil
 }
 
-func SubscribeObservations(token string, deviceId int) (dataCh chan Observation, controlCh chan bool, err error) {
+func SubscribeObservations(token string, deviceId int) (ch chan Observation, err error) {
 	var (
 		conn    *websocket.Conn
 		reqJson []byte
@@ -296,7 +296,7 @@ func SubscribeObservations(token string, deviceId int) (dataCh chan Observation,
 	// Connect
 	u, err := url.Parse(WSURL)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	q := u.Query()
@@ -304,16 +304,16 @@ func SubscribeObservations(token string, deviceId int) (dataCh chan Observation,
 	u.RawQuery = q.Encode()
 
 	if conn, _, err = websocket.DefaultDialer.Dial(u.String(), nil); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	log.Println("connected to ws")
 	if err = conn.ReadJSON(&msg); err != nil {
 		conn.Close()
-		return nil, nil, err
+		return nil, err
 	}
 	if msg.Type != "connection_opened" {
 		log.Printf("%+v", msg)
-		return nil, nil, fmt.Errorf("received message type %s, expecting connection_opened", msg.Type)
+		return nil, fmt.Errorf("received message type %s, expecting connection_opened", msg.Type)
 	}
 	log.Printf("received connection_opened: %+v", msg)
 
@@ -325,30 +325,29 @@ func SubscribeObservations(token string, deviceId int) (dataCh chan Observation,
 	}
 	maxId += 1
 	if reqJson, err = json.Marshal(req); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if err = conn.WriteMessage(websocket.TextMessage, reqJson); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	log.Printf("sent listen_start message %+v", req)
 	if err = conn.ReadJSON(&msg); err != nil {
 		conn.Close()
-		return nil, nil, err
+		return nil, err
 	}
 	if msg.Type != "ack" {
 		log.Printf("%+v", msg)
-		return nil, nil, fmt.Errorf("received message type %s, expecting ack", msg.Type)
+		return nil, fmt.Errorf("received message type %s, expecting ack", msg.Type)
 	}
 	log.Printf("subscribed: %+v", msg)
 
-	dataCh = make(chan Observation)
-	controlCh = make(chan bool)
+	ch = make(chan Observation)
 
 	go func() {
 		for {
 			log.Println("waiting for message")
 			if err = conn.ReadJSON(&msg); err != nil {
-				close(dataCh)
+				close(ch)
 				break
 			}
 			log.Printf("received message %+v", msg)
@@ -358,7 +357,7 @@ func SubscribeObservations(token string, deviceId int) (dataCh chan Observation,
 				continue
 			}
 			for _, v := range msg.ObservationsRaw {
-				dataCh <- RawToObs(v)
+				ch <- RawToObs(v)
 			}
 			log.Printf("message passed on")
 		}
@@ -378,5 +377,5 @@ func SubscribeObservations(token string, deviceId int) (dataCh chan Observation,
 		log.Println("bye!")
 	}()
 
-	return dataCh, controlCh, nil
+	return ch, nil
 }
