@@ -65,8 +65,8 @@ func init() {
 
 func SaveTempestDataToDb(deviceId int, obs tempest.Observation) (err error) {
 	res, err := db.Exec(insertObs,
-		obs.Timestamp,
 		deviceId,
+		obs.Timestamp,
 		obs.WindLull,
 		obs.WindAvg,
 		obs.WindGust,
