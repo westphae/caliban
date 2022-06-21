@@ -130,7 +130,7 @@ type WSRespMessage struct {
 	Id              string      `json:"id"`
 	DeviceId        int         `json:"device_id"`
 	StationId       int         `json:"station_id"`
-	Event           []string    `json:"evt"`
+	Event           []int64     `json:"evt"`
 	ObservationsRaw [][]float64 `json:"obs"`
 	Observations    []Observation
 }
@@ -239,7 +239,7 @@ func GetDeviceObservations(token string, deviceId int, timeStart, timeEnd int64)
 	q := u.Query()
 	q.Set("token", token)
 	if timeStart > 0 && timeEnd > 0 {
-		q.Set("timeStart", fmt.Sprintf("%d", timeStart))
+		q.Set("time_start", fmt.Sprintf("%d", timeStart))
 		q.Set("time_end", fmt.Sprintf("%d", timeEnd))
 	}
 	u.RawQuery = q.Encode()
@@ -269,13 +269,13 @@ func GetDeviceObservations(token string, deviceId int, timeStart, timeEnd int64)
 	}
 
 	if obsResult.Type != "obs_st" {
-		return nil, fmt.Errorf("received observation type %s, expected obs_st", obsResult.Type)
+		log.Printf("received observation type %s, expected obs_st", obsResult.Type)
 	}
 	if obsResult.BucketStepMinutes != 0 {
-		return nil, fmt.Errorf("received bucket_step_minutes %d, expecting 1", obsResult.BucketStepMinutes)
+		log.Printf("received bucket_step_minutes %d, expecting 1", obsResult.BucketStepMinutes)
 	}
 	if obsResult.Source != "db" && obsResult.Source != "cache" {
-		return nil, fmt.Errorf("received source %s, expecting db", obsResult.Source)
+		log.Printf("received source %s, expecting db", obsResult.Source)
 	}
 
 	obs = make([]Observation, len(obsResult.ObservationsRaw))
@@ -347,6 +347,7 @@ func SubscribeObservations(token string, deviceId int) (ch chan Observation, err
 		for {
 			log.Println("waiting for tempest message")
 			if err = conn.ReadJSON(&msg); err != nil {
+				log.Printf("error reading from ws: %s", err)
 				close(ch)
 				break
 			}
