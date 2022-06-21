@@ -2,14 +2,12 @@ package main
 
 import (
 	"fmt"
-	"log"
-	"strings"
-
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/spf13/viper"
 	"github.com/westphae/caliban/tempest"
 	"github.com/westphae/caliban/windy"
 	"github.com/westphae/caliban/wx"
+	"log"
 )
 
 var (
@@ -70,13 +68,7 @@ func main() {
 		log.Printf("client received tempest message %d: %+v", i, obs)
 
 		// Save to sqlite db
-		err = wx.SaveTempestDataToDb(deviceId, obs)
-		switch {
-		case err == nil:
-			log.Println("saved tempest data to sqlite db")
-		case strings.HasPrefix(err.Error(), "UNIQUE constraint failed"):
-			log.Println("observation already in sqlite db")
-		default:
+		if err = wx.SaveTempestDataToDb(deviceId, obs); err != nil {
 			panic(err)
 		}
 

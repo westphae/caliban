@@ -2,9 +2,12 @@ package wx
 
 import (
 	"database/sql"
-	"github.com/westphae/caliban/tempest"
 	"log"
 	"math"
+	"strings"
+
+	_ "github.com/mattn/go-sqlite3"
+	"github.com/westphae/caliban/tempest"
 )
 
 const (
@@ -39,6 +42,7 @@ PRIMARY KEY (deviceId, timestamp)
 	insertObs string = `
 INSERT INTO observations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 );`
+	getObs string = `SELECT * FROM observations WHERE deviceId = ? AND timestamp>= ? AND timestamp < ? ORDER BY timestamp;`
 )
 
 var (
@@ -89,8 +93,13 @@ func SaveTempestDataToDb(deviceId int, obs tempest.Observation) (err error) {
 		obs.LocalDayNCRainAccumulation,
 		obs.PrecipitationAnalysisType,
 	)
-	if err != nil {
-		log.Printf("%T: %s", err, err)
+	switch {
+	case err == nil:
+		log.Println("saved tempest data to sqlite db")
+	case strings.HasPrefix(err.Error(), "UNIQUE constraint failed"):
+		log.Println("observation already in sqlite db")
+		return nil
+	default:
 		return err
 	}
 
@@ -98,4 +107,50 @@ func SaveTempestDataToDb(deviceId int, obs tempest.Observation) (err error) {
 		return err
 	}
 	return nil
+}
+
+func GetTempestDataFromDb(deviceId int, tsStart, tsEnd int64) (obs []tempest.Observation, err error) {
+	var (
+		d int
+	)
+	rows, err := db.Query(getObs, deviceId, tsStart, tsEnd)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	o := tempest.Observation{}
+	for rows.Next() {
+		err = rows.Scan(
+			&d,
+			&o.Timestamp,
+			&o.WindLull,
+			&o.WindAvg,
+			&o.WindGust,
+			&o.WindDirection,
+			&o.WindSampleInterval,
+			&o.Pressure,
+			&o.AirTemperature,
+			&o.RelativeHumidity,
+			&o.Illuminance,
+			&o.UV,
+			&o.SolarRadiation,
+			&o.RainAccumulation,
+			&o.PrecipitationType,
+			&o.AverageStrikeDistance,
+			&o.StrikeCount,
+			&o.BatteryVolts,
+			&o.ReportInterval,
+			&o.LocalDayRainAccumulation,
+			&o.NCRainAccumulation,
+			&o.LocalDayNCRainAccumulation,
+			&o.PrecipitationAnalysisType,
+		)
+		if err != nil {
+			return nil, err
+		}
+		obs = append(obs, o)
+	}
+
+	return obs, nil
 }
