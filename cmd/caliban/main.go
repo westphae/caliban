@@ -17,11 +17,13 @@ import (
 )
 
 var (
-	token       string
-	stationId   int
-	deviceId    int
-	windyApiKey string
-	dbPath      string
+	token          string
+	stationId      int
+	deviceId       int
+	windyApiKey    string
+	windyStationID string
+	windyV2        bool
+	dbPath         string
 )
 
 func init() {
@@ -36,6 +38,8 @@ func init() {
 	stationId = viper.GetInt("tempest-stationId")
 	deviceId = viper.GetInt("tempest-deviceId")
 	windyApiKey = viper.GetString("windy-apiKey")
+	windyStationID = viper.GetString("windy-stationId")
+	windyV2 = viper.GetBool("windy-v2")
 	dbPath = viper.GetString("db-path")
 	if dbPath == "" {
 		dbPath = wx.DefaultPath()
@@ -73,6 +77,15 @@ func main() {
 		TempHeight:  s.StationMeta.Elevation,
 		WindHeight:  s.StationMeta.Elevation,
 	})
+	if windyV2 {
+		if windyStationID == "" {
+			log.Fatalf("fatal: windy-v2 enabled but windy-stationId is unset")
+		}
+		sender.EnableV2(windyStationID)
+		log.Printf("using windy v2 endpoint with station id %s", windyStationID)
+	} else {
+		log.Println("using windy legacy PWS endpoint (sunsets end of 2026)")
+	}
 
 	backoff := minBackoff
 	for {
@@ -103,6 +116,14 @@ func main() {
 				log.Printf("sqlite save failed: %s", err)
 			}
 
+			// Precip semantics differ across endpoints. v2 wants mm-since-local-
+			// midnight (LocalDayRainAccumulation); the legacy endpoint historically
+			// wanted mm-in-the-last-15-minutes — we send the per-minute bucket as
+			// an approximation, matching long-standing behavior.
+			precip := float64(obs.RainAccumulation)
+			if windyV2 {
+				precip = float64(obs.LocalDayRainAccumulation)
+			}
 			wObs := windy.Observation{
 				TS:       obs.Timestamp,
 				Temp:     obs.AirTemperature,
@@ -112,7 +133,7 @@ func main() {
 				RH:       obs.RelativeHumidity,
 				Dewpoint: wx.Dewpoint(float64(obs.RelativeHumidity), obs.AirTemperature),
 				Pressure: obs.Pressure,
-				Precip:   float64(obs.RainAccumulation),
+				Precip:   precip,
 				UV:       obs.UV,
 			}
 			switch err := sender.Send(wObs); {
