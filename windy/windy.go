@@ -79,15 +79,17 @@ const minWindyInterval = 5 * 60 // seconds
 // By default Sender targets the legacy PWS endpoint. Call EnableV2 to switch
 // to Windy's v2 API (which the legacy one is being retired in favour of at
 // the end of 2026). The two endpoints differ in transport (POST/JSON vs
-// GET/query params), authentication (key in URL vs Bearer header), and one
-// semantic detail callers must handle: the v2 `precip` field is millimetres
-// since local midnight, whereas legacy `precip` was millimetres in the last
+// GET/query params), authentication (account-wide API key vs per-station
+// password — separate credentials in Windy's model), and one semantic
+// detail callers must handle: the v2 `precip` field is millimetres since
+// local midnight, whereas legacy `precip` was millimetres in the last
 // fifteen minutes. Sender does not transform observation values — the caller
 // is responsible for putting the right rain accumulation in Observation.Precip.
 type Sender struct {
-	apiKey   string
-	v2ID     string // non-empty enables v2
-	lastSent int64  // unix seconds of the last successful (non-throttled) upload
+	apiKey     string
+	v2ID       string // non-empty enables v2
+	v2Password string // per-station password used as v2 Bearer credential
+	lastSent   int64  // unix seconds of the last successful (non-throttled) upload
 }
 
 // NewSender returns a Sender bound to apiKey. Station definition (lat/lon/
@@ -100,9 +102,15 @@ func NewSender(apiKey string) *Sender {
 }
 
 // EnableV2 switches this Sender to Windy's v2 endpoint. stationID is the
-// per-station identifier from the Windy dashboard (e.g. "f07f453a") and is
-// passed in the `id` query parameter.
-func (s *Sender) EnableV2(stationID string) { s.v2ID = stationID }
+// per-station identifier from the Windy dashboard (e.g. "f07f453a"), passed
+// in the `id` query parameter. password is the station's auto-generated
+// password (visible on the My Stations page, distinct from the account API
+// key) and is sent as the Bearer token. v2 will not accept the account API
+// key here — the request fails with "Provided password is invalid".
+func (s *Sender) EnableV2(stationID, password string) {
+	s.v2ID = stationID
+	s.v2Password = password
+}
 
 // Send uploads obs unless less than five minutes have elapsed since the
 // previous successful send, in which case it returns ErrThrottled.
@@ -118,7 +126,7 @@ func (s *Sender) Send(obs Observation) error {
 	}
 	var err error
 	if s.v2ID != "" {
-		err = postV2(s.apiKey, s.v2ID, obs)
+		err = postV2(s.v2Password, s.v2ID, obs)
 	} else {
 		err = postLegacy(s.apiKey, obs)
 	}
@@ -195,10 +203,11 @@ func postLegacy(apiKey string, obs Observation) error {
 	return fmt.Errorf("windy: unexpected response: %s", bodyStr)
 }
 
-// postV2 uploads obs via the v2 GET endpoint. Auth is a Bearer header; the
-// station identifier is the `id` query parameter. Response is JSON; success
-// bodies start with "Windy Success", errors include a structured message.
-func postV2(apiKey, stationID string, obs Observation) error {
+// postV2 uploads obs via the v2 GET endpoint. Auth is the per-station
+// password sent as a Bearer token (NOT the account API key — Windy treats
+// the two as separate credentials in v2). The station identifier is the
+// `id` query parameter.
+func postV2(password, stationID string, obs Observation) error {
 	q := url.Values{}
 	q.Set("id", stationID)
 	q.Set("ts", strconv.FormatInt(obs.TS, 10))
@@ -217,7 +226,7 @@ func postV2(apiKey, stationID string, obs Observation) error {
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Authorization", "Bearer "+password)
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := HTTPClient.Do(req)

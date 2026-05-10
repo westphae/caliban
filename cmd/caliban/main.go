@@ -17,12 +17,13 @@ import (
 )
 
 var (
-	token          string
-	deviceId       int
-	windyApiKey    string
-	windyStationID string
-	windyV2        bool
-	dbPath         string
+	token                string
+	deviceId             int
+	windyApiKey          string
+	windyStationID       string
+	windyStationPassword string
+	windyV2              bool
+	dbPath               string
 )
 
 func init() {
@@ -37,6 +38,7 @@ func init() {
 	deviceId = viper.GetInt("tempest-deviceId")
 	windyApiKey = viper.GetString("windy-apiKey")
 	windyStationID = viper.GetString("windy-stationId")
+	windyStationPassword = viper.GetString("windy-stationPassword")
 	windyV2 = viper.GetBool("windy-v2")
 	dbPath = viper.GetString("db-path")
 	if dbPath == "" {
@@ -66,7 +68,10 @@ func main() {
 		if windyStationID == "" {
 			log.Fatalf("fatal: windy-v2 enabled but windy-stationId is unset")
 		}
-		sender.EnableV2(windyStationID)
+		if windyStationPassword == "" {
+			log.Fatalf("fatal: windy-v2 enabled but windy-stationPassword is unset (find it on the My Stations page)")
+		}
+		sender.EnableV2(windyStationID, windyStationPassword)
 		log.Printf("using windy v2 endpoint with station id %s", windyStationID)
 	} else {
 		log.Println("using windy legacy PWS endpoint (sunsets end of 2026)")
