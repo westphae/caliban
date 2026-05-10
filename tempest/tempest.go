@@ -1,12 +1,15 @@
 package tempest
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
+	"sync/atomic"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -17,7 +20,14 @@ var (
 	stationURL            = "/stations/%d"
 	deviceObservationsURL = "/observations/device/%d"
 	WSURL                 = "wss://ws.weatherflow.com/swd/data"
-	maxId                 = 0
+	maxId                 int64 // mutated via atomic.AddInt64; keeps the package goroutine-safe
+
+	// HTTPClient is the client used for REST calls. Exported so tests can override.
+	HTTPClient = &http.Client{Timeout: 10 * time.Second}
+
+	wsHandshakeTimeout = 10 * time.Second
+	wsReadTimeout      = 90 * time.Second
+	wsPingInterval     = 30 * time.Second
 )
 
 type Status struct {
@@ -173,7 +183,7 @@ func GetStations(token string) (stationList []Station, err error) {
 	q.Set("token", token)
 	u.RawQuery = q.Encode()
 
-	resp, err := http.Get(u.String())
+	resp, err := HTTPClient.Get(u.String())
 	if err != nil {
 		return nil, err
 	}
@@ -206,7 +216,7 @@ func GetStation(token string, stationId int) (station *Station, err error) {
 	q.Set("token", token)
 	u.RawQuery = q.Encode()
 
-	resp, err := http.Get(u.String())
+	resp, err := HTTPClient.Get(u.String())
 	if err != nil {
 		return nil, err
 	}
@@ -244,7 +254,7 @@ func GetDeviceObservations(token string, deviceId int, timeStart, timeEnd int64)
 	}
 	u.RawQuery = q.Encode()
 
-	resp, err := http.Get(u.String())
+	resp, err := HTTPClient.Get(u.String())
 	if err != nil {
 		return nil, err
 	}
@@ -285,96 +295,124 @@ func GetDeviceObservations(token string, deviceId int, timeStart, timeEnd int64)
 	return obs, nil
 }
 
-func SubscribeObservations(token string, deviceId int) (ch chan Observation, err error) {
-	var (
-		conn    *websocket.Conn
-		reqJson []byte
-		msg     WSRespMessage
-		req     WSReqMessage
-	)
-
-	// Connect
+// SubscribeObservations opens a Tempest WebSocket subscription for the given
+// device. Observations are delivered on the returned channel. The channel is
+// closed when the connection ends, either because ctx was cancelled or the
+// underlying socket failed; callers should range over it and reconnect on
+// close. A read deadline plus periodic client-side pings detect half-open
+// connections that would otherwise hang silently.
+func SubscribeObservations(ctx context.Context, token string, deviceId int) (<-chan Observation, error) {
 	u, err := url.Parse(WSURL)
 	if err != nil {
 		return nil, err
 	}
-
 	q := u.Query()
 	q.Set("token", token)
 	u.RawQuery = q.Encode()
 
-	if conn, _, err = websocket.DefaultDialer.Dial(u.String(), nil); err != nil {
+	dialer := *websocket.DefaultDialer
+	dialer.HandshakeTimeout = wsHandshakeTimeout
+	conn, _, err := dialer.DialContext(ctx, u.String(), nil)
+	if err != nil {
 		return nil, err
 	}
-	log.Println("connected to tempest ws")
+
+	resetReadDeadline := func() { _ = conn.SetReadDeadline(time.Now().Add(wsReadTimeout)) }
+	resetReadDeadline()
+	conn.SetPongHandler(func(string) error { resetReadDeadline(); return nil })
+
+	// Read connection_opened.
+	var msg WSRespMessage
 	if err = conn.ReadJSON(&msg); err != nil {
 		conn.Close()
 		return nil, err
 	}
 	if msg.Type != "connection_opened" {
-		log.Printf("%+v", msg)
+		conn.Close()
 		return nil, fmt.Errorf("received message type %s, expecting connection_opened", msg.Type)
 	}
-	log.Printf("received connection_opened from tempest: %+v", msg)
+	log.Printf("connected to tempest ws: %+v", msg)
 
-	// Subscribe
-	req = WSReqMessage{
-		Type:     "listen_start",
-		DeviceId: deviceId,
-		Id:       fmt.Sprintf("%d", maxId),
-	}
-	maxId += 1
-	if reqJson, err = json.Marshal(req); err != nil {
+	// Subscribe.
+	subId := atomic.AddInt64(&maxId, 1)
+	startReq := WSReqMessage{Type: "listen_start", DeviceId: deviceId, Id: fmt.Sprintf("%d", subId)}
+	startJSON, err := json.Marshal(startReq)
+	if err != nil {
+		conn.Close()
 		return nil, err
 	}
-	if err = conn.WriteMessage(websocket.TextMessage, reqJson); err != nil {
+	_ = conn.SetWriteDeadline(time.Now().Add(wsHandshakeTimeout))
+	if err = conn.WriteMessage(websocket.TextMessage, startJSON); err != nil {
+		conn.Close()
 		return nil, err
 	}
-	log.Printf("sent listen_start message to tempest %+v", req)
+	_ = conn.SetWriteDeadline(time.Time{}) // clear write deadline; pings set their own
 	if err = conn.ReadJSON(&msg); err != nil {
 		conn.Close()
 		return nil, err
 	}
 	if msg.Type != "ack" {
-		log.Printf("%+v", msg)
+		conn.Close()
 		return nil, fmt.Errorf("received message type %s, expecting ack", msg.Type)
 	}
 	log.Printf("subscribed tempest: %+v", msg)
 
-	ch = make(chan Observation)
+	ch := make(chan Observation)
+	done := make(chan struct{})
 
+	// ctx-watcher: closing conn unblocks any in-flight read with an error.
 	go func() {
-		for {
-			log.Println("waiting for tempest message")
-			if err = conn.ReadJSON(&msg); err != nil {
-				log.Printf("error reading from ws: %s", err)
-				close(ch)
-				break
-			}
-			log.Printf("received tempest message %+v", msg)
-			if msg.Type != "obs_st" {
-				log.Printf("Unexpected msg type received from tempest: %+v", msg)
-				continue
-			}
-			for _, v := range msg.ObservationsRaw {
-				ch <- RawToObs(v)
-			}
-			log.Printf("tempest message sent to client")
-		}
-		log.Println("closing tempest ws connection and channel")
-		req = WSReqMessage{
-			Type:     "listen_stop",
-			DeviceId: deviceId,
-			Id:       fmt.Sprintf("%d", maxId),
-		}
-		if reqJson, err = json.Marshal(req); err != nil {
-			log.Println(err)
-		}
-		if err = conn.WriteMessage(websocket.TextMessage, reqJson); err != nil {
-			log.Println(err)
+		select {
+		case <-ctx.Done():
+		case <-done:
 		}
 		conn.Close()
-		log.Println("goodbye tempest!")
+	}()
+
+	// pinger: keeps the server-side idle timer happy and exercises the round
+	// trip, so a half-open connection trips our read deadline within ~90s.
+	go func() {
+		ticker := time.NewTicker(wsPingInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				deadline := time.Now().Add(wsHandshakeTimeout)
+				if err := conn.WriteControl(websocket.PingMessage, nil, deadline); err != nil {
+					return
+				}
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	go func() {
+		defer close(ch)
+		defer close(done)
+		for {
+			var rxMsg WSRespMessage
+			if err := conn.ReadJSON(&rxMsg); err != nil {
+				if ctx.Err() != nil {
+					log.Printf("tempest ws: shutting down (%s)", ctx.Err())
+				} else {
+					log.Printf("tempest ws read error: %s", err)
+				}
+				return
+			}
+			resetReadDeadline()
+			if rxMsg.Type != "obs_st" {
+				log.Printf("tempest ws: ignoring %s message", rxMsg.Type)
+				continue
+			}
+			for _, v := range rxMsg.ObservationsRaw {
+				select {
+				case ch <- RawToObs(v):
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
 	}()
 
 	return ch, nil

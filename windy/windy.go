@@ -3,14 +3,26 @@ package windy
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
+	"strings"
+	"time"
 )
 
 var (
 	PWSURL string = "https://stations.windy.com/pws/update/%s"
+
+	// HTTPClient is used for all windy uploads. Exported so tests / callers can
+	// override (e.g. to inject a transport).
+	HTTPClient = &http.Client{Timeout: 10 * time.Second}
 )
+
+// ErrThrottled is returned by Windy when an update arrives less than five
+// minutes after the previous one for the same station. Callers should treat
+// this as a no-op, not a failure. Use errors.Is to match.
+var ErrThrottled = errors.New("windy: rejected update (throttled, <5 min since last)")
 
 type Station struct {
 	Station     int     `json:"station"`
@@ -45,38 +57,38 @@ type Observation struct {
 	UV           float64 `json:"uv,omitempty"`
 }
 
-type WindyError struct{}
-
-func (e WindyError) Error() string {
-	return "windy not updating, less than 5 minutes since last update"
-}
-
-func SendToWindy(apiKey string, stations []Station, observations []Observation) (err error) {
-	var (
-		jsonData []byte
-		resp     *http.Response
-	)
-
-	url := fmt.Sprintf(PWSURL, apiKey)
-
-	if jsonData, err = json.Marshal(map[string]interface{}{
+func SendToWindy(apiKey string, stations []Station, observations []Observation) error {
+	jsonData, err := json.Marshal(map[string]interface{}{
 		"stations":     stations,
 		"observations": observations,
-	}); err != nil {
+	})
+	if err != nil {
 		return err
 	}
 
-	if resp, err = http.Post(url, "application/json; charset=UTF-8", bytes.NewBuffer(jsonData)); err != nil {
+	resp, err := HTTPClient.Post(fmt.Sprintf(PWSURL, apiKey), "application/json; charset=UTF-8", bytes.NewBuffer(jsonData))
+	if err != nil {
 		return err
 	}
+	defer resp.Body.Close()
 
-	body, _ := ioutil.ReadAll(resp.Body)
-	if len(body) > len("SUCCESS") {
-		return WindyError{}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("windy: reading response body: %w", err)
 	}
+	bodyStr := strings.TrimSpace(string(body))
+
 	if resp.StatusCode != http.StatusOK {
-		return err
+		return fmt.Errorf("windy: HTTP %d: %s", resp.StatusCode, bodyStr)
 	}
-
-	return nil
+	if bodyStr == "SUCCESS" {
+		return nil
+	}
+	// Legacy endpoint returns 200 with a non-SUCCESS body when it rejects an
+	// update for being too soon. Anything else with a non-SUCCESS body we
+	// surface as a generic error including the body so the cause is visible.
+	if strings.Contains(strings.ToLower(bodyStr), "minute") {
+		return ErrThrottled
+	}
+	return fmt.Errorf("windy: unexpected response: %s", bodyStr)
 }

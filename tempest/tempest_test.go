@@ -1,6 +1,7 @@
 package tempest
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"testing"
@@ -70,22 +71,25 @@ func TestGetManyDeviceObservations(t *testing.T) {
 }
 
 func TestSubscribeObservations(t *testing.T) {
-	obsCh, err := SubscribeObservations(token, deviceId)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	obsCh, err := SubscribeObservations(ctx, token, deviceId)
 	if err != nil {
 		t.Fatal(err)
 	}
 	log.Printf("client subscribed, listening...")
-	log.Printf("chan len is %d", len(obsCh))
 
 	i := 0
 	for obs := range obsCh {
-		i += 1
+		i++
 		log.Printf("client received message %d: %+v", i, obs)
 		if i >= 3 {
-			break
+			cancel()
 		}
 	}
-	close(obsCh)
 	log.Println("client channel closed")
-	time.Sleep(1)
+	// Give the goroutine a beat to release the conn so we don't trip leak
+	// detection when this is the final test.
+	time.Sleep(100 * time.Millisecond)
 }
