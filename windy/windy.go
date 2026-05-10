@@ -106,6 +106,12 @@ func (s *Sender) EnableV2(stationID string) { s.v2ID = stationID }
 
 // Send uploads obs unless less than five minutes have elapsed since the
 // previous successful send, in which case it returns ErrThrottled.
+//
+// On a server-side throttle response we also bump lastSent: the daemon's
+// in-memory window resets to zero on every restart, so on cold start the
+// server may reject the first observation as too soon. Treating that as a
+// soft throttle (and aligning lastSent with the server's view) avoids
+// firing the next 4–5 obs straight at a wall before reconverging.
 func (s *Sender) Send(obs Observation) error {
 	if obs.TS-s.lastSent < minWindyInterval {
 		return ErrThrottled
@@ -116,11 +122,19 @@ func (s *Sender) Send(obs Observation) error {
 	} else {
 		err = postLegacy(s.apiKey, obs)
 	}
-	if err != nil {
-		return err
+	if err == nil || errors.Is(err, ErrThrottled) {
+		s.lastSent = obs.TS
 	}
-	s.lastSent = obs.TS
-	return nil
+	return err
+}
+
+// isThrottleBody returns true if Windy's response body indicates the upload
+// was rejected for being too close to the previous one. Recognises both the
+// historical "less than 5 minutes" wording and the post-2026 "Measurement
+// sent too soon, update interval is 5 minutes" wording.
+func isThrottleBody(body string) bool {
+	lower := strings.ToLower(body)
+	return strings.Contains(lower, "too soon") || strings.Contains(lower, "5 minute")
 }
 
 func postLegacy(apiKey string, obs Observation) error {
@@ -144,6 +158,13 @@ func postLegacy(apiKey string, obs Observation) error {
 		return fmt.Errorf("windy: reading response body: %w", err)
 	}
 	bodyStr := strings.TrimSpace(string(body))
+
+	// Throttle responses can come back with either status 200 (legacy plain
+	// text) or 400 (current JSON envelope), so check the body before the
+	// status code.
+	if isThrottleBody(bodyStr) {
+		return ErrThrottled
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("windy: HTTP %d: %s", resp.StatusCode, bodyStr)
@@ -170,9 +191,6 @@ func postLegacy(apiKey string, obs Observation) error {
 			}
 			return fmt.Errorf("windy: validation errors: %s", string(rsp.Update.Errors.Observations[0]))
 		}
-	}
-	if strings.Contains(strings.ToLower(bodyStr), "minute") {
-		return ErrThrottled
 	}
 	return fmt.Errorf("windy: unexpected response: %s", bodyStr)
 }
@@ -217,7 +235,7 @@ func postV2(apiKey, stationID string, obs Observation) error {
 	if resp.StatusCode == http.StatusOK {
 		return nil
 	}
-	if resp.StatusCode == http.StatusTooManyRequests {
+	if resp.StatusCode == http.StatusTooManyRequests || isThrottleBody(bodyStr) {
 		return ErrThrottled
 	}
 	return fmt.Errorf("windy v2: HTTP %d: %s", resp.StatusCode, bodyStr)
