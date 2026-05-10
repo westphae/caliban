@@ -18,7 +18,6 @@ import (
 
 var (
 	token          string
-	stationId      int
 	deviceId       int
 	windyApiKey    string
 	windyStationID string
@@ -35,7 +34,6 @@ func init() {
 	}
 
 	token = viper.GetString("tempest-token")
-	stationId = viper.GetInt("tempest-stationId")
 	deviceId = viper.GetInt("tempest-deviceId")
 	windyApiKey = viper.GetString("windy-apiKey")
 	windyStationID = viper.GetString("windy-stationId")
@@ -63,20 +61,7 @@ func main() {
 	defer store.Close()
 	log.Printf("observations db: %s", dbPath)
 
-	s, err := tempest.GetStation(token, stationId)
-	if err != nil {
-		log.Fatalf("fatal: getting tempest station %d: %s", stationId, err)
-	}
-
-	sender := windy.NewSender(windyApiKey, windy.Station{
-		Name:        s.PublicName,
-		ShareOption: "Open",
-		Latitude:    s.Latitude,
-		Longitude:   s.Longitude,
-		Elevation:   s.StationMeta.Elevation,
-		TempHeight:  s.StationMeta.Elevation,
-		WindHeight:  s.StationMeta.Elevation,
-	})
+	sender := windy.NewSender(windyApiKey)
 	if windyV2 {
 		if windyStationID == "" {
 			log.Fatalf("fatal: windy-v2 enabled but windy-stationId is unset")

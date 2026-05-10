@@ -86,15 +86,17 @@ const minWindyInterval = 5 * 60 // seconds
 // is responsible for putting the right rain accumulation in Observation.Precip.
 type Sender struct {
 	apiKey   string
-	station  Station
 	v2ID     string // non-empty enables v2
 	lastSent int64  // unix seconds of the last successful (non-throttled) upload
 }
 
-// NewSender returns a Sender bound to apiKey and station. The station block
-// is included on every legacy upload; for v2 uploads it is unused.
-func NewSender(apiKey string, station Station) *Sender {
-	return &Sender{apiKey: apiKey, station: station}
+// NewSender returns a Sender bound to apiKey. Station definition (lat/lon/
+// name/elevation/etc.) is no longer transmitted on observation upload —
+// Windy rejected that as deprecated in early 2026 — so the caller doesn't
+// need to supply it. Stations are now configured once via the Windy
+// dashboard or PUT /api/v2/pws/:id (out of scope for this client).
+func NewSender(apiKey string) *Sender {
+	return &Sender{apiKey: apiKey}
 }
 
 // EnableV2 switches this Sender to Windy's v2 endpoint. stationID is the
@@ -112,7 +114,7 @@ func (s *Sender) Send(obs Observation) error {
 	if s.v2ID != "" {
 		err = postV2(s.apiKey, s.v2ID, obs)
 	} else {
-		err = postLegacy(s.apiKey, s.station, obs)
+		err = postLegacy(s.apiKey, obs)
 	}
 	if err != nil {
 		return err
@@ -121,9 +123,10 @@ func (s *Sender) Send(obs Observation) error {
 	return nil
 }
 
-func postLegacy(apiKey string, station Station, obs Observation) error {
+func postLegacy(apiKey string, obs Observation) error {
+	// As of early 2026 the legacy endpoint returns 410 if the request body
+	// includes a "stations" property. Send observations only.
 	jsonData, err := json.Marshal(map[string]interface{}{
-		"stations":     []Station{station},
 		"observations": []Observation{obs},
 	})
 	if err != nil {
