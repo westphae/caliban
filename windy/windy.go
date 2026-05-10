@@ -57,10 +57,42 @@ type Observation struct {
 	UV           float64 `json:"uv,omitempty"`
 }
 
-func SendToWindy(apiKey string, stations []Station, observations []Observation) error {
+// minWindyInterval is the minimum allowed interval between windy uploads for a
+// single station, per windy's PWS API rules.
+const minWindyInterval = 5 * 60 // seconds
+
+// Sender posts observations to Windy for a single station, enforcing the
+// 5-minute minimum-interval rule before any HTTP call. Zero value is not
+// usable; construct with NewSender.
+type Sender struct {
+	apiKey   string
+	station  Station
+	lastSent int64 // unix seconds of the last successful (non-throttled) upload
+}
+
+// NewSender returns a Sender bound to apiKey and station. The station block
+// is included on every legacy upload.
+func NewSender(apiKey string, station Station) *Sender {
+	return &Sender{apiKey: apiKey, station: station}
+}
+
+// Send uploads obs unless less than five minutes have elapsed since the
+// previous successful send, in which case it returns ErrThrottled.
+func (s *Sender) Send(obs Observation) error {
+	if obs.TS-s.lastSent < minWindyInterval {
+		return ErrThrottled
+	}
+	if err := postLegacy(s.apiKey, s.station, obs); err != nil {
+		return err
+	}
+	s.lastSent = obs.TS
+	return nil
+}
+
+func postLegacy(apiKey string, station Station, obs Observation) error {
 	jsonData, err := json.Marshal(map[string]interface{}{
-		"stations":     stations,
-		"observations": observations,
+		"stations":     []Station{station},
+		"observations": []Observation{obs},
 	})
 	if err != nil {
 		return err
@@ -84,9 +116,6 @@ func SendToWindy(apiKey string, stations []Station, observations []Observation) 
 	if bodyStr == "SUCCESS" {
 		return nil
 	}
-	// Legacy endpoint returns 200 with a non-SUCCESS body when it rejects an
-	// update for being too soon. Anything else with a non-SUCCESS body we
-	// surface as a generic error including the body so the cause is visible.
 	if strings.Contains(strings.ToLower(bodyStr), "minute") {
 		return ErrThrottled
 	}

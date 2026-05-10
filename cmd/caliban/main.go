@@ -10,7 +10,6 @@ import (
 	"syscall"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/spf13/viper"
 	"github.com/westphae/caliban/tempest"
 	"github.com/westphae/caliban/windy"
@@ -18,11 +17,11 @@ import (
 )
 
 var (
-	token          string
-	stationId      int
-	deviceId       int
-	windyApiKey    string
-	windyStationId string
+	token       string
+	stationId   int
+	deviceId    int
+	windyApiKey string
+	dbPath      string
 )
 
 func init() {
@@ -37,7 +36,10 @@ func init() {
 	stationId = viper.GetInt("tempest-stationId")
 	deviceId = viper.GetInt("tempest-deviceId")
 	windyApiKey = viper.GetString("windy-apiKey")
-	windyStationId = viper.GetString("windy-stationId")
+	dbPath = viper.GetString("db-path")
+	if dbPath == "" {
+		dbPath = wx.DefaultPath()
+	}
 }
 
 // reconnect backoff
@@ -50,12 +52,19 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	store, err := wx.Open(dbPath)
+	if err != nil {
+		log.Fatalf("fatal: opening sqlite at %s: %s", dbPath, err)
+	}
+	defer store.Close()
+	log.Printf("observations db: %s", dbPath)
+
 	s, err := tempest.GetStation(token, stationId)
 	if err != nil {
 		log.Fatalf("fatal: getting tempest station %d: %s", stationId, err)
 	}
 
-	station := windy.Station{
+	sender := windy.NewSender(windyApiKey, windy.Station{
 		Name:        s.PublicName,
 		ShareOption: "Open",
 		Latitude:    s.Latitude,
@@ -63,9 +72,8 @@ func main() {
 		Elevation:   s.StationMeta.Elevation,
 		TempHeight:  s.StationMeta.Elevation,
 		WindHeight:  s.StationMeta.Elevation,
-	}
+	})
 
-	var lastTimestamp int64
 	backoff := minBackoff
 	for {
 		if ctx.Err() != nil {
@@ -90,18 +98,12 @@ func main() {
 			i++
 			log.Printf("client received tempest message %d: %+v", i, obs)
 
-			if err := wx.SaveTempestDataToDb(deviceId, obs); err != nil {
+			if err := store.Save(deviceId, obs); err != nil {
 				// Don't kill the daemon on a single failed write — log and move on.
 				log.Printf("sqlite save failed: %s", err)
 			}
 
-			// Windy only wants data every 5 minutes
-			if dts := obs.Timestamp - lastTimestamp; dts < 300 {
-				log.Printf("not updating windy, time diff is only %d sec", dts)
-				continue
-			}
-
-			observation := windy.Observation{
+			wObs := windy.Observation{
 				TS:       obs.Timestamp,
 				Temp:     obs.AirTemperature,
 				Wind:     obs.WindAvg,
@@ -113,15 +115,11 @@ func main() {
 				Precip:   float64(obs.RainAccumulation),
 				UV:       obs.UV,
 			}
-			log.Printf("sending to windy: %+v", observation)
-
-			err := windy.SendToWindy(windyApiKey, []windy.Station{station}, []windy.Observation{observation})
-			switch {
+			switch err := sender.Send(wObs); {
 			case err == nil:
-				log.Println("windy updated successfully")
-				lastTimestamp = obs.Timestamp
+				log.Printf("windy updated successfully (ts=%d)", wObs.TS)
 			case errors.Is(err, windy.ErrThrottled):
-				log.Println(err)
+				log.Printf("skipping windy upload: %s", err)
 			default:
 				log.Printf("windy update failed: %s", err)
 			}

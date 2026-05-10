@@ -29,6 +29,52 @@ func init() {
 	deviceId = viper.GetInt("tempest-deviceId")
 }
 
+// TestRawToObsIndexMapping locks in the wire-format index → struct field
+// mapping for obs_st payloads. Reordering Observation fields without updating
+// RawToObs will fail this test instead of silently corrupting historical data
+// in the sqlite store.
+func TestRawToObsIndexMapping(t *testing.T) {
+	raw := make([]float64, 22)
+	for i := range raw {
+		raw[i] = float64(i + 1) // 1, 2, 3, ... so each field carries its own index
+	}
+	o := RawToObs(raw)
+
+	cases := []struct {
+		name string
+		got  float64
+		want float64
+	}{
+		{"Timestamp", float64(o.Timestamp), 1},
+		{"WindLull", o.WindLull, 2},
+		{"WindAvg", o.WindAvg, 3},
+		{"WindGust", o.WindGust, 4},
+		{"WindDirection", float64(o.WindDirection), 5},
+		{"WindSampleInterval", float64(o.WindSampleInterval), 6},
+		{"Pressure", o.Pressure, 7},
+		{"AirTemperature", o.AirTemperature, 8},
+		{"RelativeHumidity", float64(o.RelativeHumidity), 9},
+		{"Illuminance", float64(o.Illuminance), 10},
+		{"UV", o.UV, 11},
+		{"SolarRadiation", float64(o.SolarRadiation), 12},
+		{"RainAccumulation", float64(o.RainAccumulation), 13},
+		{"PrecipitationType", float64(o.PrecipitationType), 14},
+		{"AverageStrikeDistance", float64(o.AverageStrikeDistance), 15},
+		{"StrikeCount", float64(o.StrikeCount), 16},
+		{"BatteryVolts", o.BatteryVolts, 17},
+		{"ReportInterval", float64(o.ReportInterval), 18},
+		{"LocalDayRainAccumulation", float64(o.LocalDayRainAccumulation), 19},
+		{"NCRainAccumulation", float64(o.NCRainAccumulation), 20},
+		{"LocalDayNCRainAccumulation", float64(o.LocalDayNCRainAccumulation), 21},
+		{"PrecipitationAnalysisType", float64(o.PrecipitationAnalysisType), 22},
+	}
+	for _, c := range cases {
+		if c.got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, c.got, c.want)
+		}
+	}
+}
+
 func TestGetStations(t *testing.T) {
 	s, err := GetStations(token)
 	if err != nil {

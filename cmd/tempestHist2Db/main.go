@@ -13,6 +13,7 @@ import (
 var (
 	token    string
 	deviceId int
+	dbPath   string
 )
 
 func init() {
@@ -25,29 +26,36 @@ func init() {
 
 	token = viper.GetString("tempest-token")
 	deviceId = viper.GetInt("tempest-deviceId")
+	dbPath = viper.GetString("db-path")
+	if dbPath == "" {
+		dbPath = wx.DefaultPath()
+	}
 }
 
 func main() {
-	var (
-		err        error
-		i          int
-		o          tempest.Observation
-		timeNow    = time.Now().Unix()
-		timeBefore = timeNow - 60*60*24*5
-	)
-	log.Printf("Retreiving %d data from %d to %d", deviceId, timeBefore, timeNow)
+	store, err := wx.Open(dbPath)
+	if err != nil {
+		log.Fatalf("opening sqlite at %s: %s", dbPath, err)
+	}
+	defer store.Close()
+
+	timeNow := time.Now().Unix()
+	timeBefore := timeNow - 60*60*24*5
+	log.Printf("retrieving device %d from %d to %d", deviceId, timeBefore, timeNow)
 
 	obs, err := tempest.GetDeviceObservations(token, deviceId, timeBefore, timeNow)
 	if err != nil {
-		panic(err)
+		log.Fatalf("fetching device observations: %s", err)
 	}
-
 	log.Printf("received %d observations", len(obs))
 
-	for i, o = range obs {
-		if err = wx.SaveTempestDataToDb(deviceId, o); err != nil {
-			panic(err)
+	saved := 0
+	for _, o := range obs {
+		if err := store.Save(deviceId, o); err != nil {
+			log.Printf("save ts=%d failed: %s", o.Timestamp, err)
+			continue
 		}
+		saved++
 	}
-	log.Printf("finished processing %d observations", i)
+	log.Printf("finished processing %d/%d observations", saved, len(obs))
 }
