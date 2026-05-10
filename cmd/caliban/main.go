@@ -7,6 +7,7 @@ import (
 	"log"
 	"math/rand"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -34,11 +35,14 @@ func init() {
 		panic(fmt.Errorf("fatal error in config file: %w", err))
 	}
 
-	token = viper.GetString("tempest-token")
+	// TrimSpace credentials: Windy's v2 endpoint surfaces a stray newline or
+	// space inside a Bearer token as "Provided password is invalid", which is
+	// indistinguishable from a wrong-value error and very easy to misdiagnose.
+	token = strings.TrimSpace(viper.GetString("tempest-token"))
 	deviceId = viper.GetInt("tempest-deviceId")
-	windyApiKey = viper.GetString("windy-apiKey")
-	windyStationID = viper.GetString("windy-stationId")
-	windyStationPassword = viper.GetString("windy-stationPassword")
+	windyApiKey = strings.TrimSpace(viper.GetString("windy-apiKey"))
+	windyStationID = strings.TrimSpace(viper.GetString("windy-stationId"))
+	windyStationPassword = strings.TrimSpace(viper.GetString("windy-stationPassword"))
 	windyV2 = viper.GetBool("windy-v2")
 	dbPath = viper.GetString("db-path")
 	if dbPath == "" {
