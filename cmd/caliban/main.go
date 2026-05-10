@@ -117,7 +117,7 @@ func main() {
 				Gust:     obs.WindGust,
 				RH:       obs.RelativeHumidity,
 				Dewpoint: wx.Dewpoint(float64(obs.RelativeHumidity), obs.AirTemperature),
-				Pressure: obs.Pressure,
+				Pressure: obs.Pressure * 100, // Tempest reports mbar; Windy requires Pa
 				Precip:   precip,
 				UV:       obs.UV,
 			}

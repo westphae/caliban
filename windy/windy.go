@@ -60,7 +60,7 @@ type Observation struct {
 	WindGustMPH  float64 `json:"windgustmph,omitempty"`
 	RH           int     `json:"rh,omitempty"`
 	Dewpoint     float64 `json:"dewpoint,omitempty"`
-	Pressure     float64 `json:"pressure,omitempty"`
+	Pressure     float64 `json:"pressure,omitempty"` // pascals
 	MBar         float64 `json:"mbar,omitempty"`
 	BaromIn      float64 `json:"baromin,omitempty"`
 	Precip       float64 `json:"precip,omitempty"`
@@ -150,6 +150,26 @@ func postLegacy(apiKey string, obs Observation) error {
 	}
 	if bodyStr == "SUCCESS" {
 		return nil
+	}
+	// As of early 2026 the legacy endpoint started replying with a JSON
+	// envelope ({"update":{...,"errors":{"observations":[...]}}, ...}) instead
+	// of the historical plain "SUCCESS". Empty errors.observations means
+	// every field validated; non-empty means at least one field was rejected
+	// (the rest may still have been saved server-side).
+	if strings.HasPrefix(bodyStr, "{") {
+		var rsp struct {
+			Update struct {
+				Errors struct {
+					Observations []json.RawMessage `json:"observations"`
+				} `json:"errors"`
+			} `json:"update"`
+		}
+		if err := json.Unmarshal(body, &rsp); err == nil {
+			if len(rsp.Update.Errors.Observations) == 0 {
+				return nil
+			}
+			return fmt.Errorf("windy: validation errors: %s", string(rsp.Update.Errors.Observations[0]))
+		}
 	}
 	if strings.Contains(strings.ToLower(bodyStr), "minute") {
 		return ErrThrottled
